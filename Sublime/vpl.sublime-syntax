@@ -7,12 +7,22 @@ scope: scope.vpl
 # This will assign the string.quoted.double.c scope to all text while the string context is on the stack.
 contexts:
   main:
-    - match: \b(if|IF|end_if|END_IF|THEN|then)\b
-      scope: keyword.control.vpl
     - match: '"'
-      push: string
+      push: double_quoted_string
+    - match: "'"
+      push: single_quoted_string
+    - match: \b(if|IF|end_if|END_IF|THEN|then)\b
+      scope: keyword.control.conditional.vpl
+      
 
-  string:
+  single_quoted_string:
+    - meta_scope: string.quoted.single.vpl
+    - match: \\.
+      scope: constant.character.escape.vpl 
+    - match: "'"
+      pop: true
+
+  double_quoted_string:            
     - meta_scope: string.quoted.double.vpl
     - match: \\.
       scope: constant.character.escape.vpl 

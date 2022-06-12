@@ -20,7 +20,8 @@ have decided to devolp this.
 	5) This is a YAML File so we have to edit that out. Copy the contents from our repo located under Sublime folder and paste in yours 
 	6) To check out just create a simple file "main.vpl" and then see the color magic happen ✨  
 	7) See the example screen shot below 😎
-	
+	8) For more info check out this answer https://stackoverflow.com/questions/49781644/custom-syntax-in-sublime-text-3
+
 ![ExampleSublimeDev](Early_Example.png)
 	
 ## Early Tries
