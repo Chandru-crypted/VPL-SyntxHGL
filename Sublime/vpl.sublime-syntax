@@ -1,0 +1,20 @@
+%YAML 1.2
+---
+# http://www.sublimetext.com/docs/syntax.html
+name: vpl
+file_extensions: [vpl, VPL, inc, INC]
+scope: scope.vpl
+# This will assign the string.quoted.double.c scope to all text while the string context is on the stack.
+contexts:
+  main:
+    - match: \b(if|IF|end_if|END_IF|THEN|then)\b
+      scope: keyword.control.vpl
+    - match: '"'
+      push: string
+
+  string:
+    - meta_scope: string.quoted.double.vpl
+    - match: \\.
+      scope: constant.character.escape.vpl 
+    - match: '"'
+      pop: true
