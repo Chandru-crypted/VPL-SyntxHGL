@@ -31,7 +31,7 @@ variables:
   identifier: \b[[:alpha:]_][[:alnum:]_]*\b # upper and lowercase
   macro_identifier: \b[[:upper:]_][[:upper:][:digit:]_]{2,}\b # only uppercase, at least 3 chars
   control_keywords: '\b((?i)break(?-i))\b|\b((?i)case(?-i))\b|\b((?i)continue(?-i))\b|\b((?i)else(?-i))\b|\b((?i)for(?-i))\b||\b((?i)end_for(?-i))\b|\b((?i)if(?-i))\b||\b((?i)end_if(?-i))\b|\b((?i)return(?-i))\b|\b((?i)while(?-i))\b|\b((?i)end_while(?-i))\b|\b((?i)then(?-i))\b'
-  basic_types: 'asm|__asm__|auto|bool|_Bool|char|_Complex|double|float|_Imaginary|int|long|short|signed|unsigned|void'
+  basic_types: '\b((?i)bool(?-i))\b|\b((?i)int(?-i))\b|\b((?i)float(?-i))\b'
   before_tag: 'struct|union|enum'
   declspec: '__declspec\(\s*\w+(?:\([^)]+\))?\s*\)'
   storage_classes: 'static|extern|register|{{declspec}}'
@@ -40,11 +40,14 @@ variables:
   modifiers: '{{storage_classes}}|{{type_qualifier}}|{{compiler_directive}}'
   non_func_keywords: 'if|for|switch|while|decltype|sizeof|__declspec|__attribute__'
 
+
+
 contexts:
   main:
     - include: strings
     - include: comments    
     - include : keywords
+    - include : expressions
 
   strings:
     - match: '(L|u8|u|U)?(")'
@@ -77,7 +80,7 @@ contexts:
     - match: \\(?:\\|[abefnrtv\'"?]|[0-3][0-9]{0,2}|[4-7][0-9]?|x[a-fA-F0-9]+|u[a-fA-F0-9]{4}|U[a-fA-F0-9]{8})
       scope: constant.character.escape.vpl
     - match: \\.
-      scope: invalid.illegal.unknown-escape.vpl
+      scope: invalid.illegal.unknown-escape.vpl 
 
   string_placeholder:
     - match: |-
@@ -122,6 +125,359 @@ contexts:
         - match: \n
           pop: true
 
+  # Comment handling in preprocessor directives are complicated by the fact
+  # that a single-line comment will normally consume the newline to prevent
+  # completions from being presented to the user. Additionally, a multi-line
+  # comment without a line continuation ends at the newline.
+  preprocessor-comments:
+    - match: /\*
+      scope: punctuation.definition.comment.c
+      push:
+        - meta_scope: comment.block.c
+        - match: '\\$\n'
+          scope: punctuation.separator.continuation.c
+        - match: \*/
+          scope: punctuation.definition.comment.c
+          pop: true
+    - match: //
+      scope: punctuation.definition.comment.c
+      push:
+        - meta_scope: comment.line.double-slash.c
+        - match: '(\\)$\n'
+          captures:
+            1: punctuation.separator.continuation.c
+          pop: true
+        - match: (?=\n)
+          pop: true  
+
+  preprocessor-expressions:
+    - include: preprocessor-macro-define
+    - include: preprocessor-other # going to remove this 
+
+
+  numbers:
+    # https://en.cppreference.com/w/c/language/floating_constant
+
+    # decimal floats
+    - match: |-
+        (?x:
+          \b({{dec_digits}})
+          (?:
+            ( (\.)
+              (?:
+                # 1.1, 1.1e1, 1.1e-1, 1.1f, 1.1e1f, 1.1e-1f, 1.1L, 1.1e1L, 1.1e-1L
+                {{dec_digit}}+ {{dec_exponent}}?
+                # 1.e1, 1.e-1, 1.e1f, 1.e-1f, 1.e1L, 1.e-1L
+                | {{dec_exponent}}
+                # 1., 1.f, 1.L # but not `..`
+                | (?!\.)
+              )
+              # 1e1 1e1f 1e1L
+              | {{dec_exponent}}
+            ) ({{double_suffix}})?
+            # 1f
+            | ({{float_suffix}})
+          ) ({{dec_suffix}})?
+          # .1, .1e1, .1e-1, .1f, .1e1f, .1e-1f, .1L, .1e1L, .1e-1L
+          | ( (\.) {{dec_digit}}+ {{dec_exponent}}? ) (?: ({{double_suffix}}) | ({{dec_suffix}}) )?
+        )
+      scope: meta.number.float.decimal.c
+      captures:
+        1: constant.numeric.value.c
+        2: constant.numeric.value.c
+        3: punctuation.separator.decimal.c
+        4: constant.numeric.suffix.c
+        5: constant.numeric.suffix.c
+        6: invalid.illegal.numeric.suffix.c
+        7: constant.numeric.value.c
+        8: punctuation.separator.decimal.c
+        9: constant.numeric.suffix.c
+        10: invalid.illegal.numeric.suffix.c
+
+    # hexadecimal float (C99)
+    - match: \b(0[xX])({{hex_digit}}*(\.){{hex_digit}}*{{hex_exponent}})(?:([fFlL]\b)|({{dec_suffix}}))?
+      scope: meta.number.float.hexadecimal.c
+      captures:
+        1: constant.numeric.base.c
+        2: constant.numeric.value.c
+        3: punctuation.separator.decimal.c
+        4: constant.numeric.suffix.c
+        5: invalid.illegal.numeric.suffix.c
+
+    # https://en.cppreference.com/w/c/language/integer_constant
+
+    # binary integer (C23)
+    - match: \b(0[bB])({{bin_digit}}*)(?:({{integer_suffix}})|({{bin_suffix}}))?
+      scope: meta.number.integer.binary.c
+      captures:
+        1: constant.numeric.base.c
+        2: constant.numeric.value.c
+        3: constant.numeric.suffix.c
+        4: invalid.illegal.numeric.suffix.c
+
+    # hexadecimal integer
+    - match: \b(0[xX])({{hex_digit}}*)(?:({{integer_suffix}})|({{hex_suffix}}))?
+      scope: meta.number.integer.hexadecimal.c
+      captures:
+        1: constant.numeric.base.c
+        2: constant.numeric.value.c
+        3: constant.numeric.suffix.c
+        4: invalid.illegal.numeric.suffix.c
+
+    # octal integer
+    - match: \b(0)({{oct_digit}}+)(?:({{integer_suffix}})|({{oct_suffix}}))?
+      scope: meta.number.integer.octal.c
+      captures:
+        1: constant.numeric.base.c
+        2: constant.numeric.value.c
+        3: constant.numeric.suffix.c
+        4: invalid.illegal.numeric.suffix.c
+
+    # decimal integer
+    - match: \b({{dec_digits}})(?:({{integer_suffix}})|({{dec_suffix}}))?
+      scope: meta.number.integer.decimal.c
+      captures:
+        1: constant.numeric.value.c
+        2: constant.numeric.suffix.c
+        3: invalid.illegal.numeric.suffix.c
+  
+  operators:
+    - match: (?:\+\+|--)
+      scope: keyword.operator.arithmetic.c
+    - match: '->'
+      scope: punctuation.accessor.c
+    - match: \+\=|-\=|\*\=|/\=|%\=|&\=|\|\=|\^\=|>>\=|<<\=
+      scope: keyword.operator.assignment.augmented.c
+    - match: <<|>>|&&|\|\|
+      scope: keyword.operator.arithmetic.c
+    - match: <\=|>\=|\=\=|<|>|\!\=
+      scope: keyword.operator.comparison.c
+    - match: \+|\-|/|%|\||\^|~|!
+      scope: keyword.operator.arithmetic.c
+    # These two operator can be both arithmetic and pointer/address related
+    - match: \*|&
+      scope: keyword.operator.c
+    - match: \=
+      scope: keyword.operator.assignment.c
+    # Negative lookahead prevents match :: when included in C++
+    - match: '\?|:(?!:)'
+      scope: keyword.operator.ternary.c
+    - match: '\.\.\.'
+      scope: keyword.operator.variadic.c
+
+  parens:
+    - match: \(
+      scope: punctuation.section.group.begin.c
+      push:
+        - meta_scope: meta.group.c
+        - match: \)
+          scope: punctuation.section.group.end.c
+          pop: true
+        - include: expressions
+
+  brackets:
+    - match: \[
+      scope: punctuation.section.brackets.begin.c
+      push:
+        - meta_scope: meta.brackets.c
+        - match: \]
+          scope: punctuation.section.brackets.end.c
+          pop: true
+        - include: expressions
+
+  variables:
+    - match: '\bg[A-Z]\w*\b'
+      scope: variable.other.readwrite.global.mac-classic.c
+    - match: '\bs[A-Z]\w*\b'
+      scope: variable.other.readwrite.static.mac-classic.c
+
+  constants:
+    - match: \b(__func__|NULL|true|false|TRUE|FALSE)\b
+      scope: constant.language.c
+    - match: \b(__FILE__|__FUNCTION__|__LINE__)\b
+      scope: support.constant.c
+    # common C constant naming idiom -- kConstantVariable
+    - match: '\bk[A-Z]\w*\b'
+      scope: constant.other.variable.mac-classic.c
+    - match: \b(noErr|kNilOptions|kInvalidID|kVariableLengthArray)\b
+      scope: support.constant.mac-classic.c
+
+  access-illegal:
+    - match: \.\.(?!\.)
+      scope: invalid.illegal.syntax.c
+
+  access:
+    - match: '(\.)({{identifier}})(?!\s*\()'
+      captures:
+        1: punctuation.accessor.c
+        2: variable.other.member.c
+    - include: access-illegal
+    - match: \.(?!\.)
+      scope: punctuation.accessor.c
+
+  types:
+    - match: \b({{before_tag}})\b
+      scope: keyword.declaration.c
+    - match: \b({{basic_types}})\b
+      scope: storage.type.c
+    - match: \b(u_char|u_short|u_int|u_long|ushort|uint|u_quad_t|quad_t|qaddr_t|caddr_t|daddr_t|dev_t|fixpt_t|blkcnt_t|blksize_t|gid_t|in_addr_t|in_port_t|ino_t|key_t|mode_t|nlink_t|id_t|pid_t|off_t|segsz_t|swblk_t|uid_t|id_t|clock_t|size_t|ssize_t|time_t|useconds_t|suseconds_t|ptrdiff_t)\b
+      scope: support.type.sys-types.c
+  expressions:
+    - include: early-expressions
+    - include: late-expressions
+
+  early-expressions:
+    - include: preprocessor-expressions
+    - include: comments
+    - include: keywords
+    - include: numbers
+    - include: operators
+    - include: strings
+    - include: parens
+    - include: brackets
+    - include: variables
+    - include: constants
+    - include: access
+    - match: ','
+      scope: punctuation.separator.c
+    - match: '\)|\}'
+      scope: invalid.illegal.stray-bracket-end.c
+
+  late-expressions:
+    - include: types
+    - match: ';'
+      scope: punctuation.terminator.c
+
+  preprocessor-line-continuation:
+    - match: '(\\)$\n'
+      captures:
+        1: punctuation.separator.continuation.c
+    - match: \\(\s+?)$
+      captures:
+        1: invalid.illegal.space-after-continuation.c
+
+  preprocessor-line-ending:
+    - match: $\n
+      pop: true
+
+  preprocessor-macro-params:
+    - meta_scope: meta.preprocessor.macro.parameters.c meta.group.c
+    - match: '{{identifier}}'
+      scope: variable.parameter.c
+    - match: \)
+      scope: punctuation.section.group.end.c
+      set: preprocessor-macro-definition
+    - match: ','
+      scope: punctuation.separator.c
+      push:
+        - match: '{{identifier}}'
+          scope: variable.parameter.c
+          pop: true
+        - include: preprocessor-line-continuation
+        - include: preprocessor-comments
+        - match: '\.\.\.'
+          scope: keyword.operator.variadic.c
+        - match: '(?=\))'
+          pop: true
+        - match: (/\*).*(\*/)
+          scope: comment.block.c
+          captures:
+            1: punctuation.definition.comment.c
+            2: punctuation.definition.comment.c
+        - match: '\S+'
+          scope: invalid.illegal.unexpected-character.c
+    - include: preprocessor-line-continuation
+    - include: preprocessor-comments
+    - match: '\.\.\.'
+      scope: keyword.operator.variadic.c
+    - match: (/\*).*(\*/)
+      scope: comment.block.c
+      captures:
+        1: punctuation.definition.comment.c
+        2: punctuation.definition.comment.c
+    - match: $\n
+      scope: invalid.illegal.unexpected-end-of-line.c
+
+  preprocessor-macro-definition:
+    - meta_content_scope: meta.preprocessor.macro.c
+    - include: preprocessor-line-continuation
+    - include: preprocessor-comments
+    # Don't define blocks in define statements
+    - match: '\{'
+      scope: punctuation.section.block.begin.c
+    - match: '\}'
+      scope: punctuation.section.block.end.c
+    - include: expressions
+
+  preprocessor-macro-define:
+    - match: ^\s*(#\s*define)\b
+      captures:
+        1: meta.preprocessor.macro.c keyword.control.import.define.c
+      push:
+        - meta_content_scope: meta.preprocessor.macro.c
+        - include: preprocessor-line-continuation
+        - include: preprocessor-line-ending
+        - include: preprocessor-comments
+        - match: '({{identifier}})(?=\()'
+          scope: entity.name.function.preprocessor.c
+          set:
+            - match: '\('
+              scope: punctuation.section.group.begin.c
+              set: preprocessor-macro-params
+        - match: '{{identifier}}'
+          scope: entity.name.constant.preprocessor.c
+          set: preprocessor-macro-definition
+
+  preprocessor-other:
+    - match: ^\s*(#\s*(?:if|ifdef|ifndef|elif|else|line|pragma|undef))\b
+      captures:
+        1: keyword.control.import.c
+      push:
+        - meta_scope: meta.preprocessor.c
+        - include: preprocessor-line-continuation
+        - include: preprocessor-line-ending
+        - include: preprocessor-comments
+        - match: \bdefined\b
+          scope: keyword.control.c
+    - match: ^\s*(#\s*endif)\b
+      captures:
+        1: meta.preprocessor.c keyword.control.import.c
+    - match: ^\s*(#\s*(?:error|warning))\b
+      captures:
+        1: keyword.control.import.error.c
+      push:
+        - meta_scope: meta.preprocessor.diagnostic.c
+        - include: preprocessor-line-continuation
+        - include: preprocessor-line-ending
+        - include: preprocessor-comments
+        - include: strings
+        - match: '\S+'
+          scope: string.unquoted.c
+    #- match: ^\s*(#\s*(?:include|include_next|import))\b
+    - match: ^\s*(\s*(?:(?i)include))\b
+      captures:
+        1: keyword.control.import.include.c
+      push:
+        - meta_scope: meta.preprocessor.include.c
+        - include: preprocessor-line-continuation
+        - include: preprocessor-line-ending
+        - include: preprocessor-comments
+        - match: '"'
+          scope: punctuation.definition.string.begin.c
+          push:
+            - meta_scope: string.quoted.double.include.c
+            - match: '"'
+              scope: punctuation.definition.string.end.c
+              pop: true
+        - match: <
+          scope: punctuation.definition.string.begin.c
+          push:
+            - meta_scope: string.quoted.other.lt-gt.include.c
+            - match: ">"
+              scope: punctuation.definition.string.end.c
+              pop: true
+    - include: preprocessor-practical-workarounds
+
   keywords:
     - match: \b((?i)break(?-i))\b
       scope: keyword.control.flow.break.vpl
@@ -133,3 +489,4 @@ contexts:
       scope: keyword.control.vpl
     - match: \b((?i)sizeof(?-i))\b
       scope: keyword.operator.word.vpl
+
